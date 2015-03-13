@@ -26,9 +26,20 @@ function twitter_lite_form($form, &$form_state) {
 		'#description' => t('The username that is used on the twitter account. Without the @ symbol.'),
 		'#required' => TRUE,
 	);
+	
+	$form['twitter_search_term'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Twitter Search Term'),
+		'#default_value' => variable_get('twitter_search_term'),
+		'#size' => 100,
+		'#maxlength' => 100,
+		'#description' => t('Enter a search term for this field. You can use a hashtag or terms.'),
+		'#required' => TRUE,
+	);
+	
 	$form['tweets_number_block_1'] = array(
 	    '#type' => 'select',
-	    '#title' => t('Number of tweets to display: Block 1'), 
+	    '#title' => t('Number of tweets to display: User Feed'), 
 	    '#default_value' => variable_get('tweets_number_block_1'),
 	    '#options' => array(
           1 => t('1'),
@@ -47,7 +58,7 @@ function twitter_lite_form($form, &$form_state) {
 	);	
 	$form['tweets_number_block_2'] = array(
 	    '#type' => 'select', 
-	    '#title' => t('Number of tweets to display: Block 2'),
+	    '#title' => t('Number of tweets to display: Search Term'),
 	    '#default_value' => variable_get('tweets_number_block_2'),
 	    '#options' => array(
           1 => t('1'),
@@ -197,21 +208,30 @@ function twitter_1() {
 	
 	}	
 	
-/* 	print_r($twitter_data); */
-
+	//print_r(json_decode($json));
+	
+	if(isset($twitter_data->errors[0]->code)) {
+		$error = $twitter_data->errors[0]->code;
+	} else {
+		$error = '';
+	}
 	
 	if (empty($twitter_data)) {
 	
-		$content = '<div class="large-12 columns alert-box alert">Please check the username you\'ve entered.</div>';
+		$content = '<div class="alert-box alert">Please check the username you\'ve entered.</div>';
 		$content .= '<br><br><br><br>';
 		return $content;	
-				
+	
+	} elseif ($error == 215 || $error == 34 || $error == 32) {
+
+		$content = '<div class="alert-box alert">Please check the Twitter username you\'ve entered.</div>';
+		$content .= '<br><br><br><br>';
+		return $content;	
+	
 	} else {
 	// play with the data!
 
 		$tweets = $twitter_data;
-
-/* 		print_r($tweets); */
 
 		$content = "<div class=\"twitter-wrap\">";
 		$content .= '<ul class="">';			
@@ -234,127 +254,83 @@ function twitter_1() {
 }
 
 
-// Twitter API Block
-function twitter_2() {
+function twitter_search() {
 	
-	$token = variable_get('oauth');
-	$token_secret = variable_get('secret');
-	$consumer_key = variable_get('key');
-	$consumer_secret = variable_get('consumer');
-	
-	$host = 'api.twitter.com';
-	$method = 'GET';
-	$path = '/1.1/statuses/user_timeline.json'; // api call path
-	
-	$query = array( // query parameters
-	    'screen_name' => variable_get('twitter_username'),
-	    'count' => variable_get('tweets_number_block_2')
+	require_once('TwitterAPIExchange.php');
+
+	$token2 = variable_get('oauth');
+	$token_secret2 = variable_get('secret');
+	$consumer_key2 = variable_get('key');
+	$consumer_secret2 = variable_get('consumer');
+
+	$settings = array(
+	    'oauth_access_token' => $token2,
+	    'oauth_access_token_secret' => $token_secret2,
+	    'consumer_key' => $consumer_key2,
+	    'consumer_secret' => $consumer_secret2
 	);
 	
-	$oauth = array(
-	    'oauth_consumer_key' => $consumer_key,
-	    'oauth_token' => $token,
-	    'oauth_nonce' => (string)mt_rand(), // a stronger nonce is recommended
-	    'oauth_timestamp' => time(),
-	    'oauth_signature_method' => 'HMAC-SHA1',
-	    'oauth_version' => '1.0'
-	);
+	$url = 'https://api.twitter.com/1.1/search/tweets.json';
+	$search = variable_get('twitter_search_term');
+	$encoded = rawurlencode($search);
+	$getfield = '?q=' . $encoded . '&count=' . variable_get('tweets_number_block_2');
+	$requestMethod = 'GET';
 	
-	$oauth = array_map("rawurlencode", $oauth); // must be encoded before sorting
-	$query = array_map("rawurlencode", $query);
+	$twitter = new TwitterAPIExchange($settings);
+	$response = $twitter->setGetfield($getfield)
+		->buildOauth($url, $requestMethod)
+		->performRequest();
 	
-	$arr = array_merge($oauth, $query); // combine the values THEN sort
+	$twitter_data2 = json_decode($response);
+
+	// play with the data
 	
-	asort($arr); // secondary sort (value)
-	ksort($arr); // primary sort (key)
-	
-	// http_build_query automatically encodes, but our parameters
-	// are already encoded, and must be by this point, so we undo
-	// the encoding step
-	$querystring = urldecode(http_build_query($arr, '', '&'));
-	
-	$url = "https://$host$path";
-	
-	// mash everything together for the text to hash
-	$base_string = $method."&".rawurlencode($url)."&".rawurlencode($querystring);
-	
-	// same with the key
-	$key = rawurlencode($consumer_secret)."&".rawurlencode($token_secret);
-	
-	// generate the hash
-	$signature = rawurlencode(base64_encode(hash_hmac('sha1', $base_string, $key, true)));
-	
-	// this time we're using a normal GET query, and we're only encoding the query params
-	// (without the oauth params)
-	$url .= "?".http_build_query($query);
-	
-	$oauth['oauth_signature'] = $signature; // don't want to abandon all that work!
-	ksort($oauth); // probably not necessary, but twitter's demo does it
-	
-	// also not necessary, but twitter's demo does this too
-	function add_quotes($str) { return '"'.$str.'"'; }
-	$oauth = array_map("add_quotes", $oauth);
-	
-	// this is the full value of the Authorization line
-	$auth = "OAuth " . urldecode(http_build_query($oauth, '', ', '));
-	
-	// if you're doing post, you need to skip the GET building above
-	// and instead supply query parameters to CURLOPT_POSTFIELDS
-	$options = array( CURLOPT_HTTPHEADER => array("Authorization: $auth"),
-	                  //CURLOPT_POSTFIELDS => $postfields,
-	                  CURLOPT_HEADER => false,
-	                  CURLOPT_URL => $url,
-	                  CURLOPT_RETURNTRANSFER => true,
-	                  CURLOPT_SSL_VERIFYPEER => false);
-	
-	// do our business
-	$feed = curl_init();
-	curl_setopt_array($feed, $options);
-	$json = curl_exec($feed);
-	curl_close($feed);
-	
-	$twitter_data = json_decode($json);
-	
-	function linkify_tweet($twitter_data) {
+	function linkify_tweet2($twitter_data2) {
 	
 		//Convert urls to <a> links
-		$twitter_data = preg_replace("/([\w]+\:\/\/[\w-?&;#~=\.\/\@]+[\w\/])/", "<a target=\"_blank\" href=\"$1\">$1</a>", $twitter_data);
+		$twitter_data2 = preg_replace("/([\w]+\:\/\/[\w-?&;#~=\.\/\@]+[\w\/])/", "<a target=\"_blank\" href=\"$1\">$1</a>", $twitter_data2);
 		
 		//Convert hashtags to twitter searches in <a> links
-		$twitter_data = preg_replace("/#([A-Za-z0-9\/\.]*)/", "<a target=\"_new\" href=\"http://twitter.com/search?q=$1\">#$1</a>", $twitter_data);
+		$twitter_data2 = preg_replace("/#([A-Za-z0-9\/\.]*)/", "<a target=\"_new\" href=\"http://twitter.com/search?q=$1\">#$1</a>", $twitter_data2);
 		
 		//Convert attags to twitter profiles in <a> links
-		$twitter_data = preg_replace("/@([A-Za-z0-9\/\.]*)/", "<a target=\"_blank\" href=\"http://www.twitter.com/$1\">@$1</a>", $twitter_data);
+		$twitter_data2 = preg_replace("/@([A-Za-z0-9\/\.]*)/", "<a target=\"_blank\" href=\"http://www.twitter.com/$1\">@$1</a>", $twitter_data2);
 		
-		return $twitter_data;
-
+		return $twitter_data2;
+	
 	}
-	
-	print_r($twitter_data);
 
-	
-	if (empty($twitter_data)) {
-	
-		$content = '<div class="large-12 columns alert-box alert">Please check the username you are looking for. They may go by a different name or their full name instead of a nickname.</div>';
+	$tweets2 = $twitter_data2->statuses;
+
+	if(empty($tweets2)) {
+		
+		$content = '<div class="alert-box alert">There were no tweets found for the search term entered.</div>';
 		$content .= '<br><br><br><br>';
-		return $content;	
-				
+		return $content;			
+		
 	} else {
-	// play with the data!
-		$tweets = $twitter_data;
-	
-		$content = "<div class=\"congress-wrap row\">";
-		$content .= '<ul class="large-12 columns">';			
-			foreach ($tweets as $tweet) {					
-				$content .=  '<div>' . $tweet->text . '</div>';																	
+
+		$content = "<div class=\"twitter-wrap\">";
+		$content .= '<ul class="">';			
+			foreach ($tweets2 as $tweet2) {
+				$content .=  '<li class="row">';
+					$content .=  '<div class="tweet-logo"><img src="' . $tweet2->user->profile_image_url . '"></div>';					
+					$content .=  '<div class="tweet-text">' . linkify_tweet2($tweet2->text) . '';		
+					$content .=  '<div class="intents">';
+					$content .=  '<span class="reply"><a target="_blank" href="https://twitter.com/intent/tweet?in_reply_to=' . $tweet2->id . '">Reply</a></span>';
+					$content .=  '<span class="retweet"><a target="_blank" href="https://twitter.com/intent/retweet?tweet_id=' . $tweet2->id . '">Retweet</a></span>';
+					$content .=  '<span class="favorite"><a target="_blank" href="https://twitter.com/intent/favorite?tweet_id=' . $tweet2->id .'">Favorite</a></span>';
+					$content .=  '</div></div>';																				
 				$content .= '</li>';
 			}
 		$content .= '</ul>';
 		
 		return $content;
-	}		
 	
+	}
+
 }
+
 
 /**
  * Implements hook_block_info().
@@ -383,7 +359,7 @@ function twitter_lite_block_view($delta = '') {
       break;    
     case 'twitter_block_2': 
       $block['subject'] = t('Tweets Block 2');
-      $block['content'] = twitter_2();
+      $block['content'] = twitter_search();
       break;                
   }
   return $block;

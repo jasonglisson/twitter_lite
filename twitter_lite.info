@@ -1,1 +1,6 @@
 name = Twitter Lite
+description = Creates two twitter feed blocks
+core = 7.x
+package = Twitter
+version = "7.x-1.0-dev"
+configure = admin/config/content/twitter_lite
